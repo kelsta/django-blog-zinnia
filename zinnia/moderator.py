@@ -13,6 +13,7 @@ from zinnia.settings import PROTOCOL
 from zinnia.settings import MAIL_COMMENT
 from zinnia.settings import MAIL_COMMENT_REPLY
 from zinnia.settings import AKISMET_COMMENT
+from zinnia.settings import COMMENT_NOTIFICATION_RECIPIENTS
 
 AKISMET_API_KEY = getattr(settings, 'AKISMET_SECRET_API_KEY', '')
 
@@ -24,10 +25,27 @@ class EntryCommentModerator(CommentModerator):
     enable_field = 'comment_enabled'
 
     def email(self, comment, content_object, request):
+        """
+        Send email notification of a new comment to site staff when email
+        notifications have been requested.
+
+        """
         if comment.is_public:
-            super(EntryCommentModerator, self).email(comment, content_object,
-                                                     request)
+            if not self.email_notification:
+                return
+            if COMMENT_NOTIFICATION_RECIPIENTS:
+              recipient_list = [recipient_tuple[1] for recipient_tuple in COMMENT_NOTIFICATION_RECIPIENTS]
+            else:
+              recipient_list = [manager_tuple[1] for manager_tuple in settings.MANAGERS]
+            t = loader.get_template('comments/comment_notification_email.txt')
+            c = Context({ 'comment': comment,
+                          'content_object': content_object })
+            subject = '[%s] New comment posted on "%s"' % (Site.objects.get_current().name,
+                                                              content_object)
+            message = t.render(c)
+            send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipient_list, fail_silently=True)
             self.email_reply(comment, content_object, request)
+
 
     def email_reply(self, comment, content_object, request):
         """Send email notification of a new comment to site staff when email
@@ -38,8 +56,12 @@ class EntryCommentModerator(CommentModerator):
         if comment.flags.count():
             return
 
-        exclude_list = [manager_tuple[1] for manager_tuple
-                        in settings.MANAGERS] + [comment.userinfo['email']]
+        if COMMENT_NOTIFICATION_RECIPIENTS:
+          exclude_list = [recipient_tuple[1] for recipient_tuple
+                          in COMMENT_NOTIFICATION_RECIPIENTS] + [comment.userinfo['email']]
+        else:
+          exclude_list = [manager_tuple[1] for manager_tuple
+                          in settings.MANAGERS] + [comment.userinfo['email']]
         recipient_list = set([comment.userinfo['email']
                               for comment in content_object.comments
                               if comment.userinfo['email']]) ^ \
